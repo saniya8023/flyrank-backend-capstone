@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: billing_user
+      POSTGRES_PASSWORD: billing_pass
+      POSTGRES_DB: billing_engine
+    ports:
+      - "5432:5432"
+    volumes:
+      - billing_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U billing_user -d billing_engine"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://billing_user:billing_pass@db:5432/billing_engine
+    command: ["alembic", "upgrade", "head"]
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+asyncpg://billing_user:billing_pass@db:5432/billing_engine
+      STRIPE_API_KEY: ${STRIPE_API_KEY:-sk_test_placeholder}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
+      STRIPE_PRICE_ID_PRO: ${STRIPE_PRICE_ID_PRO:-price_placeholder_pro}
+    ports:
+      - "8000:8000"
+
+volumes:
+  billing_pg_data:

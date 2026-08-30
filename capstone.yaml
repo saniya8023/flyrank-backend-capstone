@@ -1,0 +1,63 @@
+name: usage-metering-billing-engine
+version: "1.0.0"
+description: >
+  Usage Metering & Billing Engine — FastAPI/PostgreSQL SaaS service
+  covering exactly-once usage metering, quota enforcement (429/402),
+  integer-cents AI token pricing, and Stripe Test Mode billing sync.
+
+base_url: "http://localhost:8000"
+
+# --- Bring the full stack up (Postgres + migrations + app) ---
+run:
+  - name: start_stack
+    command: "docker compose up -d --build"
+  - name: wait_for_health
+    command: "until curl -sf http://localhost:8000/health; do sleep 1; done"
+    timeout_seconds: 60
+
+# --- Seed baseline data the evaluator's scripted requests assume ---
+# Plans (free, pro) are already seeded by the 0001 Alembic migration's
+# bulk_insert on `docker compose up` (via the `migrate` service). This
+# step only creates the two tenants the smoke checks assume exist.
+seed:
+  command: >
+    curl -sf -X POST http://localhost:8000/v1/tenants
+    -H "Content-Type: application/json"
+    -d '{"name": "Evaluator Free Co", "plan_type": "free"}' &&
+    curl -sf -X POST http://localhost:8000/v1/tenants
+    -H "Content-Type: application/json"
+    -d '{"name": "Evaluator Pro Co", "plan_type": "pro"}'
+
+# --- Health / smoke check the evaluator polls before running the suite ---
+health_check:
+  path: "/health"
+  expected_status: 200
+
+# --- Local (non-docker) test entrypoint, used by CI / evaluator alike ---
+test:
+  command: "pytest tests/ -v"
+  working_directory: "."
+
+teardown:
+  command: "docker compose down -v"
+
+endpoints:
+  - method: POST
+    path: /v1/tenants
+    description: Create a tenant + initial subscription on a given plan.
+  - method: POST
+    path: /v1/usage
+    description: Record a billable usage event (api_call or ai_token). Requires Idempotency-Key header.
+  - method: GET
+    path: /v1/tenants/{tenant_id}/quota
+    description: Read-only current-period quota status for a tenant.
+  - method: POST
+    path: /v1/webhooks/stripe
+    description: Stripe Test Mode webhook receiver (signature-verified).
+
+environment:
+  required_env_vars:
+    - DATABASE_URL
+    - STRIPE_API_KEY
+    - STRIPE_WEBHOOK_SECRET
+    - STRIPE_PRICE_ID_PRO
